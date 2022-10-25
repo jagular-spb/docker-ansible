@@ -1,0 +1,197 @@
+ARG PYTHON_FAMILY=3.6
+
+FROM --platform=linux/amd64 python:${PYTHON_FAMILY}-slim-bullseye as ansible-local-builder
+ARG VERSION
+ENV DEBIAN_FRONTEND=noninteractive
+# Package required tools for all flavour's "builder" stage
+RUN set -eux \
+    && apt-get -qq -y upgrade \
+    && apt-get -qq -y update \
+    && apt-get -qq install -y --no-install-recommends git \
+		bc \
+		cargo \
+		cmake \
+		curl \
+		g++ \
+		gcc \
+		git \
+		libffi-dev \
+		libxml2-dev \
+		libxslt-dev \
+		make \
+		musl-dev \
+		libssl-dev \
+		rustc \
+    && apt-get -qq clean
+
+# Fix: ansible --version: libyaml = True
+# https://www.jeffgeerling.com/blog/2021/ansible-might-be-running-slow-if-libyaml-not-available
+RUN set -eux \
+    && apt-get -qq install -y --no-install-recommends libyaml-dev \
+    && pip3 install --no-cache-dir --no-compile pyyaml \
+	&& python3 -c 'import _yaml'
+
+
+# Pip required tools for all flavour's "builder" stage
+RUN set -eux \
+	&& pip3 install --no-cache-dir --no-compile \
+		wheel \
+    && pip3 install --upgrade pip \
+	&& pip3 install --no-cache-dir --no-compile \
+		Jinja2 \
+		MarkupSafe \
+		PyNaCl \
+		bcrypt \
+		cffi \
+		cryptography \
+		pycparser \
+		junit-xml \
+		lxml \
+		paramiko 
+
+RUN set -eux \
+    && PATCHED=$(echo "${VERSION}" | tr -d -c '.'  | awk '{ print length; }') \
+    && echo "VERSION: ${VERSION}\nPATCHED: ${PATCHED}" \
+	&& if [ "${VERSION}" = "latest" ]; then \
+		pip3 install --no-cache-dir --no-compile ansible; \
+    elif [ "${PATCHED}" = "2" ]; then \
+      pip3 install --no-cache-dir --no-binary pyyaml ansible=="${VERSION}"; \
+	elif [ "${VERSION}" = "2.9" ]; then \
+		pip3 install --no-cache-dir --no-binary pyyaml "ansible>=${VERSION},<2.10"; \
+	elif [ "${VERSION}" = "2.10" ]; then \
+		pip3 install --no-cache-dir --no-binary pyyaml "ansible>=${VERSION},<2.11"; \
+	elif [ "${VERSION}" = "2.11" ]; then \
+		pip3 install --no-cache-dir --no-binary pyyaml "ansible-core>=${VERSION},<2.12"; \
+	else \
+		pip3 install --no-cache-dir --no-binary pyyaml "ansible>=${VERSION},<$(echo "${VERSION}+0.1" | bc)"; \
+	fi \
+	\
+	&& if [ "${VERSION}" != "latest" ]; then \
+		ansible --version | grep ^ansible | grep -E "${VERSION}(\.[0-9]+)?" \
+		&& ansible-playbook --version | grep ^ansible | grep -E "${VERSION}(\.[0-9]+)?" \
+		&& ansible-galaxy --version | grep ^ansible | grep -E "${VERSION}(\.[0-9]+)?"; \
+	fi \
+	\
+	&& find /usr/local/lib/ -name '__pycache__' -print0 | xargs -0 -n1 rm -rf \
+	&& find /usr/local/lib/ -name '*.pyc' -print0 | xargs -0 -n1 rm -rf
+
+
+
+# Clean-up some site-packages to safe space
+RUN set -eux \
+	&& pip3 uninstall --yes \
+		setuptools \
+		wheel
+
+
+# Python packages (copied to final image)
+RUN set -eux \
+	&& if [ "${VERSION}" = "2.5" ]; then \
+		pip3 install --no-cache-dir --no-compile dnspython mitogen==0.2.10; \
+	elif [ "${VERSION}" = "2.6" ]; then \
+		pip3 install --no-cache-dir --no-compile dnspython mitogen==0.2.10; \
+	elif [ "${VERSION}" = "2.7" ]; then \
+		pip3 install --no-cache-dir --no-compile dnspython mitogen==0.2.10; \
+	elif [ "${VERSION}" = "2.8" ]; then \
+		pip3 install --no-cache-dir --no-compile dnspython mitogen==0.2.10; \
+	elif [ "${VERSION}" = "2.9" ]; then \
+		pip3 install --no-cache-dir --no-compile dnspython mitogen==0.2.10; \
+	else \
+		pip3 install --no-cache-dir --no-compile dnspython; \
+	fi \
+	&& find /usr/local/lib/ -name '__pycache__' -print0 | xargs -0 -n1 rm -rf \
+	&& find /usr/local/lib/ -name '*.pyc' -print0 | xargs -0 -n1 rm -rf
+
+# Binaries (copied to final image)
+RUN set -eux \
+	&& YQ="$( curl -L -sS -o /dev/null -w %{url_effective} https://github.com/mikefarah/yq/releases/latest | sed 's/^.*\///g' )" \
+	&& curl -L -sS "https://github.com/mikefarah/yq/releases/download/${YQ}/yq_linux_amd64" > /usr/bin/yq \
+	&& chmod +x /usr/bin/yq \
+	&& yq --version
+
+# --------------------------------------------------------------------------------------------------
+# Final Image
+# --------------------------------------------------------------------------------------------------
+FROM --platform=linux/amd64 python:${PYTHON_FAMILY}-slim-bullseye  as production
+ARG VERSION
+ARG PYTHON_FAMILY=3.6
+# https://github.com/opencontainers/image-spec/blob/master/annotations.md
+#LABEL "org.opencontainers.image.created"=""
+#LABEL "org.opencontainers.image.version"=""
+#LABEL "org.opencontainers.image.revision"=""
+LABEL "maintainer"="Egor A. Fisher"
+LABEL "org.opencontainers.image.authors"="."
+LABEL "org.opencontainers.image.vendor"="jagular-spb"
+LABEL "org.opencontainers.image.licenses"="MIT"
+LABEL "org.opencontainers.image.url"="https://github.com/jagular-spb/docker-ansible"
+LABEL "org.opencontainers.image.documentation"="https://github.com/jagular-spb/docker-ansible"
+LABEL "org.opencontainers.image.source"="https://github.com/jagular-spb/docker-ansible"
+LABEL "org.opencontainers.image.ref.name"="Ansible ${VERSION} tools"
+LABEL "org.opencontainers.image.title"="Ansible ${VERSION} tools"
+LABEL "org.opencontainers.image.description"="Ansible ${VERSION} tools"
+
+# Define uid/gid and user/group names
+ENV \
+	MY_USER=gitlab \
+	MY_GROUP=gitlab \
+	MY_UID=1000 \
+	MY_GID=1000
+
+# Add user and group
+RUN set -eux \
+	&& addgroup --gid ${MY_GID} ${MY_GROUP} \
+	&& adduser --home /home/gitlab --shell /bin/bash --gid ${MY_GID} --disabled-password --uid ${MY_UID} ${MY_USER} \
+	\
+	&& mkdir /home/gitlab/.gnupg \
+	&& chown gitlab:gitlab /home/gitlab/.gnupg \
+	&& chmod 0700 /home/gitlab/.gnupg \
+	\
+	&& mkdir /home/gitlab/.ssh \
+    && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > /home/gitlab/.ssh/config \
+    && chown -R gitlab:gitlab /home/gitlab/.ssh \
+	&& chmod 0700 /home/gitlab/.ssh 
+
+
+
+# Additional binaries
+RUN set -eux \
+    && apt-get -qq -y upgrade \
+    && apt-get -qq -y update \
+    && apt-get -qq install -y --no-install-recommends \
+		bash \
+		git \
+		gnupg \
+		jq \
+		openssh-client \
+        libgcc-s1 \
+        libyaml-0-2 \
+    && apt-get -qq clean
+
+RUN set -eux \
+	&& ln -sf ansible /usr/local/bin/ansible-config \
+	&& ln -sf ansible /usr/local/bin/ansible-console \
+	&& ln -sf ansible /usr/local/bin/ansible-doc \
+	&& ln -sf ansible /usr/local/bin/ansible-galaxy \
+	&& ln -sf ansible /usr/local/bin/ansible-inventory \
+	&& ln -sf ansible /usr/local/bin/ansible-playbook \
+	&& ln -sf ansible /usr/local/bin/ansible-pull \
+	&& ln -sf ansible /usr/local/bin/ansible-test \
+	&& ln -sf ansible /usr/local/bin/ansible-vault \
+	&& find /usr/locl/lib/ -name '__pycache__' -print0 | xargs -0 -n1 rm -rf \
+	&& find /usr/local/lib/ -name '*.pyc' -print0 | xargs -0 -n1 rm -rf
+
+
+COPY --from=ansible-local-builder "/usr/local/lib/python${PYTHON_FAMILY}/site-packages/" "/usr/local/lib/python${PYTHON_FAMILY}/site-packages/"
+COPY --from=ansible-local-builder /usr/bin/yq /usr/bin/yq
+COPY --from=ansible-local-builder /usr/local/bin/ansible /usr/local/bin/ansible
+COPY --from=ansible-local-builder /usr/local/bin/ansible-connection /usr/local/bin/ansible-connection
+COPY --chmod=755 ./data/docker-entrypoint.sh /docker-entrypoint.sh
+
+# Pre-compile Python for better performance
+RUN set -eux \
+	&& python3 -m compileall "/usr/local/lib/python${PYTHON_FAMILY}"
+
+WORKDIR /data
+ENTRYPOINT ["/docker-entrypoint.sh"]
+#USER gitlab
+CMD ["/bin/bash"]
